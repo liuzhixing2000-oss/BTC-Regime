@@ -1,0 +1,25 @@
+symbol: BTCUSDT
+category: linear
+base_interval: "15"
+history_days: 365
+output_dir: output
+
+thresholds:
+  long_direction: 55
+  short_direction: -55
+  min_opportunity: 55
+  min_confidence: 60
+  max_event_risk: 70
+
+structure:
+  swing_left: 3
+  swing_right: 3
+  breakout_atr: 0.10
+  retest_tolerance_atr: 0.25
+  retest_window_4h_bars: 4
+  volume_lookback: 20
+
+backtest:
+  horizons_hours: [1, 4, 8, 12, 24]
+  signal_cooldown_hours: 4
+
