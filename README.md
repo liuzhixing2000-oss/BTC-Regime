@@ -60,4 +60,10 @@ python bull_regime_backtest.py --refresh
 python bull_regime_backtest.py
 ```
 
+运行预先限定的回调参数敏感性测试：
+
+```bash
+python bull_regime_backtest.py --sensitivity
+```
+
 结果写入 `output/bull_regime_v1/`。初轮结论见 `BULL_REGIME_V1_REPORT.md`：完整历史表现由少数大趋势单驱动，但2025年至今的锁定样本外结果为负，因此当前版本只能继续研究，不能接入提醒或实盘。
