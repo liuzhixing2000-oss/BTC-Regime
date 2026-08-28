@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from bull_regime_backtest import Config, confirmed_swings, prepare
+from bull_regime_backtest import Config, confirmed_swings, prepare, variant_signal
 
 
 def sample_bars(n=1500):
@@ -32,6 +32,14 @@ class BullRegimeTests(unittest.TestCase):
         swings = confirmed_swings(bars, left=2, right=2)
         self.assertFalse(np.isfinite(swings.swing_low.iloc[9]))
         self.assertTrue(np.isfinite(swings.swing_low.iloc[10]))
+
+    def test_variant_signal_is_prefix_stable(self):
+        bars = sample_bars()
+        short = prepare(bars.iloc[:1200], Config())
+        full = prepare(bars, Config()).iloc[:1200]
+        a = variant_signal(short, "ANY", "TWO_BAR_STABLE", 0.5, 0.3)
+        b = variant_signal(full, "ANY", "TWO_BAR_STABLE", 0.5, 0.3)
+        pd.testing.assert_series_equal(a, b)
 
 
 if __name__ == "__main__":
