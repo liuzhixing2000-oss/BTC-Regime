@@ -238,8 +238,9 @@ def simulate(x: pd.DataFrame, family: str, exit_name: str, min_score: int, cfg: 
                 reason = "REGIME_FAIL"
                 break
         if not np.isfinite(exit_price):
-            exit_price = x.iloc[j].close * (1 - cfg.slippage_rate)
-            realized_r += remaining * (exit_price - entry) / risk
+            # An open trade at the end of the dataset has no knowable exit and
+            # must not enter performance statistics.
+            break
         fee_r = cfg.fee_rate * (entry + exit_price) / risk
         net_r = realized_r - fee_r
         risk_fraction = 0.005 if sig.regime_score == 2 else 0.01
@@ -302,6 +303,69 @@ def split_name(ts: pd.Timestamp) -> str:
     return "HOLDOUT_2025_NOW"
 
 
+def variant_signal(x: pd.DataFrame, location: str, confirmation: str,
+                   trend_atr: float, tolerance_atr: float) -> pd.Series:
+    """Predeclared local sensitivity variants; all terms use current/past closed bars."""
+    tol = tolerance_atr * x.atr
+    shallow = (x.low <= x.ema20 + tol) & (x.low > x.ema50 - tol)
+    deep = (x.low <= x.ema50 + tol) | (x.low <= x.daily_mid + tol)
+    if location == "SHALLOW":
+        touched = shallow
+    elif location == "DEEP":
+        touched = deep
+    else:
+        touched = shallow | deep
+
+    one_bar = touched & (x.close > x.open) & (x.close > x.high.shift(1))
+    two_bar = (
+        touched.rolling(2).max().fillna(0).astype(bool)
+        & (x.close > x.ema20)
+        & (x.close.shift(1) > x.ema20.shift(1))
+        & (x.low > x.low.shift(1))
+    )
+    confirm = one_bar if confirmation == "ONE_BAR_RECLAIM" else two_bar
+    strength = (x.ema20 - x.ema50) / x.atr
+    trend = (x.ema20 > x.ema50) & x.hh_hl & (strength >= trend_atr)
+    not_chasing = (x.close - x.ema20) <= 1.5 * x.atr
+    return trend & not_chasing & confirm
+
+
+def run_sensitivity(x: pd.DataFrame, cfg: Config, out: Path):
+    rows, ledgers = [], []
+    for location in ["SHALLOW", "DEEP", "ANY"]:
+        for confirmation in ["ONE_BAR_RECLAIM", "TWO_BAR_STABLE"]:
+            for trend_atr in [0.0, 0.5, 1.0]:
+                for tolerance_atr in [0.15, 0.30, 0.50]:
+                    for min_score in [2, 3, 4]:
+                        work = x.copy()
+                        work["sig_pullback"] = variant_signal(
+                            work, location, confirmation, trend_atr, tolerance_atr)
+                        trades = simulate(work, "PULLBACK_RECLAIM", "A_FIXED_2R", min_score, cfg)
+                        variant = f"{location}__{confirmation}__T{trend_atr:.1f}__R{tolerance_atr:.2f}__S{min_score}"
+                        if not trades.empty:
+                            trades["split"] = trades.entry_time.map(split_name)
+                            trades["variant"] = variant
+                            ledgers.append(trades)
+                        for split in ["TRAIN_2017_2021", "VALID_2022_2024", "HOLDOUT_2025_NOW"]:
+                            group = trades[trades.entry_time.map(split_name) == split] if not trades.empty else trades
+                            rows.append({"variant": variant, "location": location,
+                                         "confirmation": confirmation, "trend_atr": trend_atr,
+                                         "tolerance_atr": tolerance_atr, "min_score": min_score,
+                                         "split": split, **summarize(group.reset_index(drop=True))})
+    grid = pd.DataFrame(rows)
+    grid.to_csv(out / "sensitivity_grid.csv", index=False)
+    ledger = pd.concat(ledgers, ignore_index=True) if ledgers else pd.DataFrame()
+
+    train = grid[(grid.split == "TRAIN_2017_2021") & (grid.trades >= 12)].copy()
+    train["train_rank"] = train.avg_net_r.rank(method="first", ascending=False)
+    selected = train.sort_values(["avg_net_r", "profit_factor"], ascending=False).head(10)[["variant", "train_rank"]]
+    reveal = grid.merge(selected, on="variant", how="inner").sort_values(["train_rank", "split"])
+    reveal.to_csv(out / "sensitivity_train_top10_reveal.csv", index=False)
+    if not ledger.empty and not selected.empty:
+        ledger[ledger.variant.isin(selected.variant)].to_csv(out / "sensitivity_selected_ledger.csv", index=False)
+    return reveal
+
+
 def run(args):
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
@@ -346,6 +410,9 @@ def run(args):
     ranked = summary[(summary.split == "FULL") & (summary.trades >= 10)].sort_values(
         ["avg_net_r", "profit_factor"], ascending=False)
     print(ranked.head(15).to_string(index=False))
+    if args.sensitivity:
+        print("\nTRAIN-SELECTED SENSITIVITY VARIANTS (validation and holdout revealed after selection)")
+        print(run_sensitivity(x, cfg, out).to_string(index=False))
 
 
 if __name__ == "__main__":
@@ -355,4 +422,5 @@ if __name__ == "__main__":
     p.add_argument("--cache", default="data/BTCUSDT_4h_spot.csv")
     p.add_argument("--output", default="output/bull_regime_v1")
     p.add_argument("--refresh", action="store_true")
+    p.add_argument("--sensitivity", action="store_true")
     run(p.parse_args())
